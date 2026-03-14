@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>E-Bike Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: sans-serif; background: #0f0f1a; color: #fff; height: 100vh; display: flex; flex-direction: column; }
+
+  header {
+    background: #1a1a2e;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #2a2a4a;
+  }
+  header h1 { font-size: 18px; font-weight: 600; color: #7df3c0; }
+  #status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #555; display: inline-block; margin-right: 6px;
+  }
+  #status-dot.online { background: #7df3c0; box-shadow: 0 0 6px #7df3c0; }
+  #status-dot.alert  { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
+  #status-text { font-size: 13px; color: #aaa; }
+
+  #map { flex: 1; width: 100%; }
+
+  .cards {
+    background: #1a1a2e;
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    border-top: 1px solid #2a2a4a;
+  }
+
+  .card {
+    background: #12122a;
+    border-radius: 10px;
+    padding: 10px 8px;
+    text-align: center;
+    border: 1px solid #2a2a4a;
+  }
+  .card.danger { border-color: #ff4444; background: #2a0f0f; }
+  .card.safe   { border-color: #7df3c0; background: #0f2a1f; }
+
+  .card-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+  .card-value { font-size: 16px; font-weight: 700; margin-top: 4px; }
+  .card-value.green  { color: #7df3c0; }
+  .card-value.red    { color: #ff4444; }
+  .card-value.blue   { color: #64b5f6; }
+  .card-value.orange { color: #ffb74d; }
+
+  #alert-banner {
+    display: none;
+    background: #ff4444;
+    color: #fff;
+    text-align: center;
+    padding: 10px;
+    font-weight: 700;
+    font-size: 15px;
+    animation: blink 1s infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+  #last-update { font-size: 11px; color: #666; text-align: center; padding: 4px; background: #1a1a2e; }
+</style>
+</head>
+<body>
+
+<div id="alert-banner">🚨 SMOKE DETECTED ON YOUR E-BIKE! 🚨</div>
+
+<header>
+  <h1>⚡ E-Bike Tracker</h1>
+  <div>
+    <span id="status-dot"></span>
+    <span id="status-text">Connecting...</span>
+  </div>
+</header>
+
+<div id="map"></div>
+
+<div class="cards">
+  <div class="card" id="card-smoke">
+    <div class="card-label">Smoke Level</div>
+    <div class="card-value orange" id="val-smoke">--</div>
+  </div>
+  <div class="card" id="card-status">
+    <div class="card-label">Safety</div>
+    <div class="card-value green" id="val-status">--</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Signal</div>
+    <div class="card-value blue" id="val-signal">GPRS</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Latitude</div>
+    <div class="card-value blue" id="val-lat">--</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Longitude</div>
+    <div class="card-value blue" id="val-lng">--</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Points logged</div>
+    <div class="card-value green" id="val-count">--</div>
+  </div>
+</div>
+
+<div id="last-update">Last update: --</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const map = L.map('map').setView([17.385, 78.486], 15);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  const bikeIcon = L.divIcon({
+    html: '<div style="font-size:28px;line-height:1">⚡</div>',
+    className: '',
+    iconSize: [30, 30],
+    iconAnchor: [15, 15]
+  });
+
+  let marker = null;
+  let routeLine = null;
+  let routePoints = [];
+  let isFirstLoad = true;
+
+  async function fetchLatest() {
+    try {
+      const res = await fetch('/latest');
+      const d = await res.json();
+
+      if (!d || !d.lat) {
+        document.getElementById('status-text').textContent = 'Waiting for bike...';
+        return;
+      }
+
+      const lat = parseFloat(d.lat);
+      const lng = parseFloat(d.lng);
+      const smoke = parseInt(d.smoke) || 0;
+      const alert = d.alert === true || d.alert === 'true';
+
+      // update marker
+      if (!marker) {
+        marker = L.marker([lat, lng], { icon: bikeIcon }).addTo(map);
+      } else {
+        marker.setLatLng([lat, lng]);
+      }
+
+      if (isFirstLoad) {
+        map.setView([lat, lng], 16);
+        isFirstLoad = false;
+      }
+
+      // update cards
+      document.getElementById('val-smoke').textContent = smoke;
+      document.getElementById('val-lat').textContent   = lat.toFixed(5);
+      document.getElementById('val-lng').textContent   = lng.toFixed(5);
+
+      const ts = d.ts ? new Date(d.ts).toLocaleTimeString() : '--';
+      document.getElementById('last-update').textContent = 'Last update: ' + ts;
+
+      // smoke alert
+      const dot    = document.getElementById('status-dot');
+      const banner = document.getElementById('alert-banner');
+      const cardStatus = document.getElementById('card-status');
+      const valStatus  = document.getElementById('val-status');
+      const cardSmoke  = document.getElementById('card-smoke');
+
+      if (alert) {
+        dot.className = 'alert';
+        document.getElementById('status-text').textContent = 'SMOKE ALERT!';
+        banner.style.display = 'block';
+        cardStatus.className = 'card danger';
+        valStatus.textContent = 'DANGER';
+        valStatus.className = 'card-value red';
+        cardSmoke.className = 'card danger';
+      } else {
+        dot.className = 'online';
+        document.getElementById('status-text').textContent = 'Live';
+        banner.style.display = 'none';
+        cardStatus.className = 'card safe';
+        valStatus.textContent = 'Safe';
+        valStatus.className = 'card-value green';
+        cardSmoke.className = 'card';
+      }
+
+    } catch(e) {
+      document.getElementById('status-text').textContent = 'Connection error';
+      console.error(e);
+    }
+  }
+
+  async function fetchHistory() {
+    try {
+      const res = await fetch('/history');
+      const data = await res.json();
+
+      if (!data || data.length === 0) return;
+
+      document.getElementById('val-count').textContent = data.length;
+
+      routePoints = data.map(d => [parseFloat(d.lat), parseFloat(d.lng)]).reverse();
+
+      if (routeLine) map.removeLayer(routeLine);
+      routeLine = L.polyline(routePoints, {
+        color: '#64b5f6',
+        weight: 3,
+        opacity: 0.8
+      }).addTo(map);
+
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  // fetch immediately then every 8 seconds
+  fetchLatest();
+  fetchHistory();
+  setInterval(fetchLatest, 8000);
+  setInterval(fetchHistory, 30000);
+</script>
+</body>
+</html>
